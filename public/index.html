@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scenes Manager</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="header-left">
+      <span class="header-dot"></span>
+      <h1>Scenes Manager</h1>
+    </div>
+    <div class="header-right">
+      <span id="weather-badge" class="weather-badge" title="Conditions actuelles"></span>
+    </div>
+  </header>
+
+  <!-- Navigation -->
+  <nav class="nav">
+    <button class="nav-btn active" data-tab="ambiances">Ambiances</button>
+    <button class="nav-btn" data-tab="capturer">Capturer</button>
+    <button class="nav-btn" data-tab="config">Configuration</button>
+  </nav>
+
+  <!-- Tab: Ambiances -->
+  <section id="tab-ambiances" class="tab-content active">
+    <div id="scenes-list" class="scenes-grid">
+      <div class="empty-state">Chargement...</div>
+    </div>
+  </section>
+
+  <!-- Tab: Capturer -->
+  <section id="tab-capturer" class="tab-content">
+    <!-- Step 1: Select room -->
+    <div id="capture-step1" class="capture-step">
+      <div class="card">
+        <h2>Capturer une ambiance</h2>
+        <p class="text-secondary">Reglez vos lumieres comme vous le souhaitez, puis capturez l'etat actuel.</p>
+
+        <div class="form-group">
+          <label>Piece</label>
+          <select id="capture-room" class="input">
+            <option value="">Chargement...</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Ambiance</label>
+          <div class="radio-group">
+            <label class="radio-label">
+              <input type="radio" name="capture-mode" value="new" checked>
+              Nouvelle ambiance
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="capture-mode" value="existing">
+              Ajouter variante a une existante
+            </label>
+          </div>
+        </div>
+
+        <div id="capture-new-fields">
+          <div class="form-group">
+            <label>Nom</label>
+            <input type="text" id="capture-name" class="input" placeholder="Ex: Soiree cozy">
+          </div>
+          <div class="form-group">
+            <label>Cle (auto)</label>
+            <input type="text" id="capture-key" class="input" placeholder="soiree-cozy" readonly>
+          </div>
+        </div>
+
+        <div id="capture-existing-fields" style="display:none">
+          <div class="form-group">
+            <label>Ambiance existante</label>
+            <select id="capture-existing-scene" class="input">
+              <option value="">Choisir...</option>
+            </select>
+          </div>
+        </div>
+
+        <button id="btn-scan" class="btn btn-green">Scanner les lumieres</button>
+      </div>
+    </div>
+
+    <!-- Step 2: Review & save -->
+    <div id="capture-step2" class="capture-step" style="display:none">
+      <div class="card">
+        <div class="step2-header">
+          <h2 id="capture-title">Capture</h2>
+          <div class="step2-header-actions">
+            <button id="btn-refresh" class="btn btn-outline" title="Rafraichir l'etat des lumieres">Rafraichir</button>
+            <button id="btn-back" class="btn btn-outline">Retour</button>
+          </div>
+        </div>
+
+        <div id="capture-devices" class="devices-list"></div>
+
+        <!-- Adaptive variants -->
+        <div class="variant-section">
+          <h3>Variantes adaptatives</h3>
+
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="adapt-daylight">
+              Jour / Nuit
+            </label>
+            <div id="adapt-daylight-options" class="radio-inline" style="display:none">
+              <label class="radio-label"><input type="radio" name="daylight" value="day"> Jour</label>
+              <label class="radio-label"><input type="radio" name="daylight" value="night" checked> Nuit</label>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="adapt-weather">
+              Meteo
+            </label>
+            <div id="adapt-weather-options" class="radio-inline" style="display:none">
+              <label class="radio-label"><input type="radio" name="weather" value="clear"> Clair</label>
+              <label class="radio-label"><input type="radio" name="weather" value="cloudy" checked> Couvert</label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Existing variants matrix -->
+        <div id="variant-matrix" class="variant-matrix" style="display:none">
+          <h3>Variantes enregistrees</h3>
+          <div id="variant-list"></div>
+        </div>
+
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="save-as-default">
+            Enregistrer comme variante par defaut
+          </label>
+        </div>
+
+        <button id="btn-save" class="btn btn-green btn-lg">Enregistrer cette variante</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tab: Config -->
+  <section id="tab-config" class="tab-content">
+    <div class="card">
+      <h2>Configuration</h2>
+
+      <div class="form-group">
+        <label>URL Gladys</label>
+        <input type="text" id="cfg-gladys-url" class="input" placeholder="http://localhost:8585">
+      </div>
+
+      <div class="form-group">
+        <label>API Key Gladys</label>
+        <input type="text" id="cfg-gladys-key" class="input" placeholder="Cle API">
+      </div>
+
+      <div class="form-group">
+        <label>Latitude</label>
+        <input type="number" id="cfg-lat" class="input" step="0.0001">
+      </div>
+
+      <div class="form-group">
+        <label>Longitude</label>
+        <input type="number" id="cfg-lon" class="input" step="0.0001">
+      </div>
+
+      <div class="form-group">
+        <label>Cle API OpenWeatherMap</label>
+        <input type="text" id="cfg-owm-key" class="input" placeholder="Cle OWM">
+      </div>
+
+      <div class="form-group">
+        <label>Seuil nuageux (%)</label>
+        <input type="number" id="cfg-cloudy" class="input" min="0" max="100" value="40">
+      </div>
+
+      <div class="form-group">
+        <label>Cache meteo (secondes)</label>
+        <input type="number" id="cfg-cache" class="input" min="60" value="600">
+      </div>
+
+      <div class="btn-group">
+        <button id="btn-save-config" class="btn btn-green">Enregistrer</button>
+        <button id="btn-test-gladys" class="btn btn-outline">Tester Gladys</button>
+        <button id="btn-test-weather" class="btn btn-outline">Tester Meteo</button>
+      </div>
+
+      <div id="config-status" class="status-box" style="display:none"></div>
+    </div>
+  </section>
+
+  <!-- Toast notifications -->
+  <div id="toast" class="toast"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

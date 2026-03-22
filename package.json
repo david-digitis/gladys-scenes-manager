@@ -1,0 +1,14 @@
+{
+  "name": "scenes-manager",
+  "version": "1.0.0",
+  "description": "Smart ambiance manager for Gladys Assistant — captures light presets with adaptive weather/daylight variants",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "mqtt": "^5.10.0",
+    "suncalc": "^1.9.0"
+  }
+}
