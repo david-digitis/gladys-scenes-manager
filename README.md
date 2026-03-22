@@ -39,7 +39,7 @@ Allez dans **Parametres -> Sessions** dans Gladys et creez une nouvelle cle API.
 ### 2. Cloner et builder
 
 ```bash
-git clone https://github.com/VOTRE_USER/gladys-scenes-manager.git
+git clone https://github.com/david-digitis/gladys-scenes-manager.git
 cd gladys-scenes-manager
 docker build -t scenes-manager .
 ```

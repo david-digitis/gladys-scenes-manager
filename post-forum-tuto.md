@@ -52,7 +52,7 @@ Negligeable — c'est le meme chemin de code que les scenes Gladys natives.
 
 Tout est sur GitHub avec le README complet, les instructions d'installation, la reference API et les screenshots :
 
-**[GitHub — gladys-scenes-manager](https://github.com/VOTRE_USER/gladys-scenes-manager)**
+**[GitHub — gladys-scenes-manager](https://github.com/david-digitis/gladys-scenes-manager)**
 
 En resume :
 1. Cloner le repo
