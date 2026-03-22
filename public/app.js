@@ -1,8 +1,23 @@
 /**
- * Scenes Manager — Frontend
+ * Scenes Manager v2.0 — Frontend
+ * 3 modes: night, day-clear, day-cloudy
  */
 
 const API = '';
+
+const MODE_LABELS = {
+  night: 'Nuit',
+  'day-clear': 'Jour beau temps',
+  'day-cloudy': 'Jour mauvais temps',
+};
+
+const MODE_SHORT = {
+  night: 'Nuit',
+  'day-clear': 'Beau',
+  'day-cloudy': 'Couvert',
+};
+
+const ALL_MODES = ['night', 'day-clear', 'day-cloudy'];
 
 // --- State ---
 
@@ -10,8 +25,10 @@ let scenes = [];
 let rooms = [];
 let captureDevices = [];
 let currentSceneKey = null;
+let selectedMode = 'night';
+let currentSceneModes = {}; // modes already saved for current scene
 
-// --- API helpers ---
+// --- Helpers ---
 
 async function api(method, path, body) {
   const opts = { method, headers: {} };
@@ -67,13 +84,10 @@ async function updateWeatherBadge() {
   try {
     const w = await api('GET', '/weather');
     const badge = document.getElementById('weather-badge');
-    const icon = w.daylight === 'night' ? '🌙' : '☀️';
-    const weather = w.weather === 'cloudy' ? '☁️' : '';
-    const temp = w.temperature !== null ? `${Math.round(w.temperature)}°C` : '';
-    badge.textContent = `${icon} ${weather} ${temp} ${w.weatherDescription || ''}`.trim();
-  } catch (e) {
-    /* ignore */
-  }
+    const temp = w.temperature !== null ? `${Math.round(w.temperature)}C` : '';
+    const mode = w.targetModeLabel || '';
+    badge.textContent = `${temp} ${w.weatherDescription || ''} — ${mode}`.trim();
+  } catch (e) { /* ignore */ }
 }
 
 // =============================================
@@ -115,11 +129,11 @@ function renderScenes() {
       <div class="scene-cards">`;
 
       roomScenes.forEach((s) => {
-        const badges = [];
-        if (s.adaptiveConditions.includes('daylight')) badges.push('Jour/Nuit');
-        if (s.adaptiveConditions.includes('weather')) badges.push('Meteo');
-        const badgeHtml = badges.map((b) => `<span class="scene-card-badge">${b}</span>`).join('');
-        const variantText = s.variantCount > 0 ? `${s.variantCount} variante(s)` : '';
+        // Mode badges
+        const modeBadges = ALL_MODES.map((m) => {
+          const filled = s.modes.includes(m);
+          return `<span class="mode-badge ${filled ? 'filled' : 'empty'}">${MODE_SHORT[m]}</span>`;
+        }).join('');
 
         html += `
         <div class="scene-card" data-key="${s.key}">
@@ -134,13 +148,13 @@ function renderScenes() {
             </div>
           </div>
           <div class="scene-card-dots" id="dots-${s.key}"></div>
-          <div class="scene-card-meta">${badgeHtml} ${variantText}</div>
-          <div class="scene-card-api" onclick="copyApi('${s.key}')" title="Cliquez pour copier">
+          <div class="scene-card-modes">${modeBadges}</div>
+          <div class="scene-card-api" onclick="copyApi('${s.key}')" title="Cliquer pour copier">
             <code>POST /scenes/${s.key}/apply</code>
           </div>
           <div class="scene-card-actions">
             <button class="btn btn-outline btn-sm" onclick="applyScene('${s.key}')">Appliquer</button>
-            <button class="btn btn-sm" style="background:var(--bg-body);color:var(--text-secondary)" onclick="testScene('${s.key}')">Tester</button>
+            <button class="btn btn-ghost btn-sm" onclick="testScene('${s.key}')">Tester</button>
           </div>
         </div>`;
       });
@@ -149,8 +163,6 @@ function renderScenes() {
     });
 
   container.innerHTML = html;
-
-  // Load color dots for each scene
   scenes.forEach((s) => loadSceneDots(s.key));
 }
 
@@ -160,23 +172,20 @@ async function loadSceneDots(key) {
     const dotsEl = document.getElementById(`dots-${key}`);
     if (!dotsEl) return;
 
-    // Get features from default or first variant
-    const variant = scene.default || (scene.variants && scene.variants[0]);
-    if (!variant || !variant.features) return;
+    // Get colors from first available mode
+    const modes = scene.modes || {};
+    const firstMode = Object.values(modes)[0];
+    if (!firstMode || !firstMode.features) return;
 
     const colors = [];
-    Object.entries(variant.features).forEach(([sel, val]) => {
-      if (sel.includes('color') && val) {
-        colors.push(intToHex(val));
-      }
+    Object.entries(firstMode.features).forEach(([sel, val]) => {
+      if (sel.includes('color') && val) colors.push(intToHex(val));
     });
 
     if (colors.length > 0) {
       dotsEl.innerHTML = colors.map((c) => `<span class="color-dot" style="background:${c}"></span>`).join('');
     }
-  } catch (e) {
-    /* ignore */
-  }
+  } catch (e) { /* ignore */ }
 }
 
 async function applyScene(key) {
@@ -187,7 +196,8 @@ async function applyScene(key) {
   try {
     const result = await api('POST', `/scenes/${key}/apply`);
     if (result.ok) {
-      toast(`${result.scene} → ${result.variant} (${result.elapsed}ms)`);
+      const fb = result.fallback ? ' (fallback)' : '';
+      toast(`${result.scene} — ${result.modeLabel}${fb} (${result.elapsed}ms)`);
     } else {
       toast(result.error || 'Erreur', 'error');
     }
@@ -200,16 +210,19 @@ async function applyScene(key) {
 }
 
 async function testScene(key) {
-  // Apply default variant without condition checking
   try {
-    const result = await api('POST', `/scenes/${key}/apply-force`, { variant: 'default' });
+    // Get scene to find first available mode
+    const scene = await api('GET', `/scenes/${key}`);
+    const modes = Object.keys(scene.modes || {});
+    if (modes.length === 0) {
+      toast('Aucun mode enregistre', 'error');
+      return;
+    }
+    const result = await api('POST', `/scenes/${key}/apply-force`, { mode: modes[0] });
     if (result.ok) {
-      toast(`Test: ${result.scene} (${result.elapsed}ms)`);
+      toast(`Test: ${result.scene} — ${result.modeLabel} (${result.elapsed}ms)`);
     } else {
-      // Fallback: try first variant
-      const result2 = await api('POST', `/scenes/${key}/apply`);
-      if (result2.ok) toast(`Test: ${result2.scene} (${result2.elapsed}ms)`);
-      else toast(result2.error || 'Erreur', 'error');
+      toast(result.error || 'Erreur', 'error');
     }
   } catch (e) {
     toast(e.message, 'error');
@@ -217,7 +230,7 @@ async function testScene(key) {
 }
 
 async function deleteScene(key) {
-  if (!confirm(`Supprimer cette ambiance ?`)) return;
+  if (!confirm('Supprimer cette ambiance ?')) return;
   const result = await api('DELETE', `/scenes/${key}`);
   if (result.ok) {
     toast('Ambiance supprimee');
@@ -229,7 +242,6 @@ async function deleteScene(key) {
 }
 
 function editScene(key) {
-  // Switch to capture tab with this scene pre-selected
   document.querySelector('[data-tab="capturer"]').click();
 
   setTimeout(() => {
@@ -249,7 +261,7 @@ function editScene(key) {
 function copyApi(key) {
   const url = `http://localhost:8890/scenes/${key}/apply`;
   navigator.clipboard.writeText(url).then(() => {
-    toast('URL copiee : ' + url, 'info');
+    toast('URL copiee', 'info');
   }).catch(() => {
     toast(url, 'info');
   });
@@ -272,7 +284,6 @@ document.addEventListener('click', closeDropdowns);
 // =============================================
 
 async function loadCaptureForm() {
-  // Load rooms
   try {
     const data = await api('GET', '/rooms');
     rooms = data.rooms || [];
@@ -285,10 +296,7 @@ async function loadCaptureForm() {
     toast('Erreur chargement pieces', 'error');
   }
 
-  // Load existing scenes for "add variant" mode
   await refreshExistingScenes();
-
-  // Reset to step 1
   showCaptureStep(1);
 }
 
@@ -320,13 +328,14 @@ document.getElementById('capture-name').addEventListener('input', (e) => {
   document.getElementById('capture-key').value = slugify(e.target.value);
 });
 
-// Adaptive condition toggles
-document.getElementById('adapt-daylight').addEventListener('change', (e) => {
-  document.getElementById('adapt-daylight-options').style.display = e.target.checked ? 'flex' : 'none';
-});
+// Mode selector buttons
+document.getElementById('mode-selector').addEventListener('click', (e) => {
+  const btn = e.target.closest('.mode-selector-btn');
+  if (!btn) return;
 
-document.getElementById('adapt-weather').addEventListener('change', (e) => {
-  document.getElementById('adapt-weather-options').style.display = e.target.checked ? 'flex' : 'none';
+  document.querySelectorAll('.mode-selector-btn').forEach((b) => b.classList.remove('active'));
+  btn.classList.add('active');
+  selectedMode = btn.dataset.mode;
 });
 
 // Scan button
@@ -342,15 +351,23 @@ document.getElementById('btn-scan').addEventListener('click', async () => {
   if (isNew) {
     const name = document.getElementById('capture-name').value.trim();
     if (!name) {
-      toast('Donnez un nom a l\'ambiance', 'error');
+      toast("Donnez un nom a l'ambiance", 'error');
       return;
     }
     currentSceneKey = slugify(name);
+    currentSceneModes = {};
   } else {
     currentSceneKey = document.getElementById('capture-existing-scene').value;
     if (!currentSceneKey) {
       toast('Selectionnez une ambiance existante', 'error');
       return;
+    }
+    // Load existing modes
+    try {
+      const scene = await api('GET', `/scenes/${currentSceneKey}`);
+      currentSceneModes = scene.modes || {};
+    } catch (e) {
+      currentSceneModes = {};
     }
   }
 
@@ -362,16 +379,13 @@ document.getElementById('btn-scan').addEventListener('click', async () => {
     const data = await api('GET', `/capture/devices?room=${encodeURIComponent(room)}`);
     captureDevices = data.devices || [];
     renderCaptureDevices();
+    renderModeStatus();
+    updateModeSelectorIndicators();
     showCaptureStep(2);
 
-    // Load variant matrix if existing scene
-    if (!isNew) {
-      loadVariantMatrix(currentSceneKey);
-    }
-
     const title = isNew
-      ? `Capture — ${document.getElementById('capture-name').value}`
-      : `Variante — ${document.getElementById('capture-existing-scene').selectedOptions[0].text}`;
+      ? document.getElementById('capture-name').value
+      : document.getElementById('capture-existing-scene').selectedOptions[0].text;
     document.getElementById('capture-title').textContent = title;
   } catch (e) {
     toast('Erreur: ' + e.message, 'error');
@@ -393,16 +407,16 @@ function renderCaptureDevices() {
     const tempFeature = dev.features.find((f) => f.type === 'temperature');
 
     const isOn = powerFeature ? powerFeature.lastValue === 1 : (dimmerFeature ? dimmerFeature.lastValue > 0 : false);
-    const color = colorFeature && colorFeature.lastValue ? intToHex(colorFeature.lastValue) : '#888888';
+    const color = colorFeature && colorFeature.lastValue ? intToHex(colorFeature.lastValue) : '#666';
     const brightness = brightnessFeature ? Math.round(brightnessFeature.lastValue) : (dimmerFeature ? Math.round(dimmerFeature.lastValue) : null);
 
     html += `
       <div class="device-row ${isOn ? '' : 'off'}" data-device="${dev.selector}">
         <input type="checkbox" class="device-check" ${isOn ? 'checked' : ''} data-device-sel="${dev.selector}">
-        <div class="device-color" style="background:${isOn ? color : '#333'}"></div>
+        <div class="device-color" style="background:${isOn ? color : '#444'}"></div>
         <div class="device-info">
           <div class="device-name">${dev.name}</div>
-          <div class="device-detail">${dev.service || ''} ${tempFeature ? ' | temp: ' + Math.round(tempFeature.lastValue) : ''}</div>
+          <div class="device-detail">${dev.service || ''}${tempFeature ? ' | temp: ' + Math.round(tempFeature.lastValue) : ''}</div>
         </div>
         ${brightness !== null ? `<div class="device-brightness">${brightness}%</div>` : ''}
       </div>`;
@@ -411,98 +425,31 @@ function renderCaptureDevices() {
   container.innerHTML = html;
 }
 
-async function loadVariantMatrix(key) {
-  try {
-    const scene = await api('GET', `/scenes/${key}`);
-    const matrixEl = document.getElementById('variant-matrix');
-    const listEl = document.getElementById('variant-list');
+function renderModeStatus() {
+  const container = document.getElementById('mode-status');
 
-    if (!scene.variants || scene.variants.length === 0) {
-      matrixEl.style.display = 'none';
-      return;
-    }
+  const html = ALL_MODES.map((m) => {
+    const filled = !!currentSceneModes[m];
+    return `<div class="mode-status-item ${filled ? 'filled' : ''}">
+      <span class="mode-status-dot"></span>
+      <span>${MODE_LABELS[m]}</span>
+    </div>`;
+  }).join('');
 
-    matrixEl.style.display = 'block';
-    let html = '';
-
-    // Show default
-    if (scene.default) {
-      const dotColors = extractColors(scene.default.features);
-      html += `<div class="variant-item exists">
-        <span class="variant-label">Par defaut</span>
-        <div class="variant-dots">${dotColors.map((c) => `<span class="color-dot" style="background:${c};width:12px;height:12px"></span>`).join('')}</div>
-      </div>`;
-    }
-
-    // Show variants
-    scene.variants.forEach((v) => {
-      const dotColors = extractColors(v.features);
-      html += `<div class="variant-item exists">
-        <span class="variant-label">${v.label}</span>
-        <div class="variant-dots">${dotColors.map((c) => `<span class="color-dot" style="background:${c};width:12px;height:12px"></span>`).join('')}</div>
-        <div class="variant-actions">
-          <button class="btn btn-sm btn-outline" onclick="applyVariant('${key}', '${v.label}')">Tester</button>
-        </div>
-      </div>`;
-    });
-
-    // Show missing combinations
-    const conditions = scene.adaptiveConditions || [];
-    if (conditions.length > 0) {
-      const combos = generateCombinations(conditions);
-      combos.forEach((combo) => {
-        const label = Object.entries(combo)
-          .map(([k, v]) => (k === 'daylight' ? (v === 'day' ? 'Jour' : 'Nuit') : v === 'clear' ? 'Clair' : 'Couvert'))
-          .join(' + ');
-        const exists = scene.variants.some((v) => v.when && JSON.stringify(v.when) === JSON.stringify(combo));
-        if (!exists) {
-          html += `<div class="variant-item missing">
-            <span class="variant-label">${label} (manquante)</span>
-          </div>`;
-        }
-      });
-    }
-
-    listEl.innerHTML = html;
-  } catch (e) {
-    /* ignore */
-  }
+  container.innerHTML = html;
 }
 
-async function applyVariant(key, label) {
-  const result = await api('POST', `/scenes/${key}/apply-force`, { variant: label });
-  if (result.ok) toast(`Test: ${result.variant} (${result.elapsed}ms)`);
-  else toast(result.error, 'error');
-}
-
-function extractColors(features) {
-  const colors = [];
-  Object.entries(features).forEach(([sel, val]) => {
-    if (sel.includes('color') && val) colors.push(intToHex(val));
+function updateModeSelectorIndicators() {
+  document.querySelectorAll('.mode-selector-btn').forEach((btn) => {
+    const mode = btn.dataset.mode;
+    btn.classList.toggle('has-data', !!currentSceneModes[mode]);
   });
-  return colors;
-}
-
-function generateCombinations(conditions) {
-  const values = { daylight: ['day', 'night'], weather: ['clear', 'cloudy'] };
-  let combos = [{}];
-  conditions.forEach((cond) => {
-    if (!values[cond]) return;
-    const newCombos = [];
-    combos.forEach((c) => {
-      values[cond].forEach((v) => {
-        newCombos.push({ ...c, [cond]: v });
-      });
-    });
-    combos = newCombos;
-  });
-  return combos;
 }
 
 // Back button
 document.getElementById('btn-back').addEventListener('click', () => showCaptureStep(1));
 
-// Refresh button — re-scan devices to get current light states
+// Refresh button
 document.getElementById('btn-refresh').addEventListener('click', async () => {
   const room = document.getElementById('capture-room').value;
   if (!room) return;
@@ -550,26 +497,12 @@ document.getElementById('btn-save').addEventListener('click', async () => {
     return;
   }
 
-  // Build conditions
-  const isDefault = document.getElementById('save-as-default').checked;
-  const conditions = {};
-
-  if (!isDefault) {
-    if (document.getElementById('adapt-daylight').checked) {
-      conditions.daylight = document.querySelector('input[name="daylight"]:checked').value;
-    }
-    if (document.getElementById('adapt-weather').checked) {
-      conditions.weather = document.querySelector('input[name="weather"]:checked').value;
-    }
-  }
-
   const body = {
     sceneKey: currentSceneKey,
     sceneName: isNew ? document.getElementById('capture-name').value.trim() : undefined,
     room,
     features,
-    isDefault,
-    conditions: Object.keys(conditions).length > 0 ? conditions : undefined,
+    mode: selectedMode,
   };
 
   const btn = document.getElementById('btn-save');
@@ -579,9 +512,13 @@ document.getElementById('btn-save').addEventListener('click', async () => {
   try {
     const result = await api('POST', '/capture', body);
     if (result.ok) {
-      toast(`Variante "${result.variant}" enregistree pour "${currentSceneKey}"`);
-      // Reload variant matrix
-      if (!isNew) loadVariantMatrix(currentSceneKey);
+      const action = result.updated ? 'mis a jour' : 'enregistre';
+      toast(`${result.modeLabel} ${action}`);
+
+      // Update local state
+      currentSceneModes[selectedMode] = true;
+      renderModeStatus();
+      updateModeSelectorIndicators();
     } else {
       toast(result.error, 'error');
     }
@@ -590,7 +527,7 @@ document.getElementById('btn-save').addEventListener('click', async () => {
   }
 
   btn.disabled = false;
-  btn.textContent = 'Enregistrer cette variante';
+  btn.textContent = 'Enregistrer ce mode';
 });
 
 // =============================================
@@ -637,7 +574,7 @@ document.getElementById('btn-test-gladys').addEventListener('click', async () =>
       statusEl.textContent = `Gladys OK\nMQTT: ${status.mqtt ? 'connecte' : 'deconnecte'}\nScenes: ${status.sceneCount}\nUptime: ${Math.round(status.uptime)}s`;
     } else {
       statusEl.className = 'status-box error';
-      statusEl.textContent = 'Gladys inaccessible. Verifiez l\'URL et la cle API.';
+      statusEl.textContent = "Gladys inaccessible. Verifiez l'URL et la cle API.";
     }
   } catch (e) {
     statusEl.className = 'status-box error';
@@ -654,7 +591,7 @@ document.getElementById('btn-test-weather').addEventListener('click', async () =
   try {
     const w = await api('GET', '/weather');
     statusEl.className = 'status-box ok';
-    statusEl.textContent = `Meteo OK\nConditions: ${w.weatherDescription}\nNuages: ${w.cloudPercent}%\nTemperature: ${w.temperature}°C\nJour/Nuit: ${w.daylight}\nMeteo: ${w.weather}\nLever: ${w.sunTimes.sunrise}\nCoucher: ${w.sunTimes.sunset}`;
+    statusEl.textContent = `Meteo OK\nConditions: ${w.weatherDescription}\nNuages: ${w.cloudPercent}%\nTemperature: ${w.temperature}C\nMode actif: ${w.targetModeLabel}\nLever: ${w.sunTimes.sunrise}\nCoucher: ${w.sunTimes.sunset}`;
   } catch (e) {
     statusEl.className = 'status-box error';
     statusEl.textContent = 'Erreur: ' + e.message;
@@ -667,4 +604,4 @@ document.getElementById('btn-test-weather').addEventListener('click', async () =
 
 loadScenes();
 updateWeatherBadge();
-setInterval(updateWeatherBadge, 600000); // Refresh every 10 min
+setInterval(updateWeatherBadge, 600000);

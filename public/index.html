@@ -9,25 +9,29 @@
 <body>
   <!-- Header -->
   <header class="header">
-    <div class="header-left">
-      <span class="header-dot"></span>
-      <h1>Scenes Manager</h1>
-    </div>
-    <div class="header-right">
-      <span id="weather-badge" class="weather-badge" title="Conditions actuelles"></span>
+    <div class="header-inner">
+      <div class="header-left">
+        <span class="header-dot"></span>
+        <h1>Scenes Manager</h1>
+      </div>
+      <div class="header-right">
+        <span id="weather-badge" class="weather-badge"></span>
+      </div>
     </div>
   </header>
 
   <!-- Navigation -->
   <nav class="nav">
-    <button class="nav-btn active" data-tab="ambiances">Ambiances</button>
-    <button class="nav-btn" data-tab="capturer">Capturer</button>
-    <button class="nav-btn" data-tab="config">Configuration</button>
+    <div class="nav-inner">
+      <button class="nav-btn active" data-tab="ambiances">Ambiances</button>
+      <button class="nav-btn" data-tab="capturer">Capturer</button>
+      <button class="nav-btn" data-tab="config">Configuration</button>
+    </div>
   </nav>
 
   <!-- Tab: Ambiances -->
   <section id="tab-ambiances" class="tab-content active">
-    <div id="scenes-list" class="scenes-grid">
+    <div id="scenes-list">
       <div class="empty-state">Chargement...</div>
     </div>
   </section>
@@ -35,7 +39,7 @@
   <!-- Tab: Capturer -->
   <section id="tab-capturer" class="tab-content">
     <!-- Step 1: Select room -->
-    <div id="capture-step1" class="capture-step">
+    <div id="capture-step1">
       <div class="card">
         <h2>Capturer une ambiance</h2>
         <p class="text-secondary">Reglez vos lumieres comme vous le souhaitez, puis capturez l'etat actuel.</p>
@@ -56,7 +60,7 @@
             </label>
             <label class="radio-label">
               <input type="radio" name="capture-mode" value="existing">
-              Ajouter variante a une existante
+              Ajouter un mode a une existante
             </label>
           </div>
         </div>
@@ -81,64 +85,36 @@
           </div>
         </div>
 
-        <button id="btn-scan" class="btn btn-green">Scanner les lumieres</button>
+        <button id="btn-scan" class="btn btn-primary">Scanner les lumieres</button>
       </div>
     </div>
 
     <!-- Step 2: Review & save -->
-    <div id="capture-step2" class="capture-step" style="display:none">
+    <div id="capture-step2" style="display:none">
       <div class="card">
         <div class="step2-header">
           <h2 id="capture-title">Capture</h2>
           <div class="step2-header-actions">
-            <button id="btn-refresh" class="btn btn-outline" title="Rafraichir l'etat des lumieres">Rafraichir</button>
-            <button id="btn-back" class="btn btn-outline">Retour</button>
+            <button id="btn-refresh" class="btn btn-outline-blue btn-sm">Rafraichir</button>
+            <button id="btn-back" class="btn btn-ghost btn-sm">Retour</button>
           </div>
         </div>
 
+        <!-- Mode selector -->
+        <label style="font-size:13px;color:var(--text-secondary);margin-bottom:8px;display:block">Mode</label>
+        <div class="mode-selector" id="mode-selector">
+          <button class="mode-selector-btn active" data-mode="night">Nuit</button>
+          <button class="mode-selector-btn" data-mode="day-clear">Jour beau temps</button>
+          <button class="mode-selector-btn" data-mode="day-cloudy">Jour mauvais temps</button>
+        </div>
+
+        <!-- Devices -->
         <div id="capture-devices" class="devices-list"></div>
 
-        <!-- Adaptive variants -->
-        <div class="variant-section">
-          <h3>Variantes adaptatives</h3>
+        <!-- Mode status -->
+        <div id="mode-status" class="mode-status"></div>
 
-          <div class="form-group">
-            <label class="checkbox-label">
-              <input type="checkbox" id="adapt-daylight">
-              Jour / Nuit
-            </label>
-            <div id="adapt-daylight-options" class="radio-inline" style="display:none">
-              <label class="radio-label"><input type="radio" name="daylight" value="day"> Jour</label>
-              <label class="radio-label"><input type="radio" name="daylight" value="night" checked> Nuit</label>
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label class="checkbox-label">
-              <input type="checkbox" id="adapt-weather">
-              Meteo
-            </label>
-            <div id="adapt-weather-options" class="radio-inline" style="display:none">
-              <label class="radio-label"><input type="radio" name="weather" value="clear"> Clair</label>
-              <label class="radio-label"><input type="radio" name="weather" value="cloudy" checked> Couvert</label>
-            </div>
-          </div>
-        </div>
-
-        <!-- Existing variants matrix -->
-        <div id="variant-matrix" class="variant-matrix" style="display:none">
-          <h3>Variantes enregistrees</h3>
-          <div id="variant-list"></div>
-        </div>
-
-        <div class="form-group">
-          <label class="checkbox-label">
-            <input type="checkbox" id="save-as-default">
-            Enregistrer comme variante par defaut
-          </label>
-        </div>
-
-        <button id="btn-save" class="btn btn-green btn-lg">Enregistrer cette variante</button>
+        <button id="btn-save" class="btn btn-primary btn-lg">Enregistrer ce mode</button>
       </div>
     </div>
   </section>
@@ -157,6 +133,8 @@
         <label>API Key Gladys</label>
         <input type="text" id="cfg-gladys-key" class="input" placeholder="Cle API">
       </div>
+
+      <hr class="separator">
 
       <div class="form-group">
         <label>Latitude</label>
@@ -184,16 +162,16 @@
       </div>
 
       <div class="btn-group">
-        <button id="btn-save-config" class="btn btn-green">Enregistrer</button>
-        <button id="btn-test-gladys" class="btn btn-outline">Tester Gladys</button>
-        <button id="btn-test-weather" class="btn btn-outline">Tester Meteo</button>
+        <button id="btn-save-config" class="btn btn-primary">Enregistrer</button>
+        <button id="btn-test-gladys" class="btn btn-outline-blue">Tester Gladys</button>
+        <button id="btn-test-weather" class="btn btn-outline-blue">Tester Meteo</button>
       </div>
 
       <div id="config-status" class="status-box" style="display:none"></div>
     </div>
   </section>
 
-  <!-- Toast notifications -->
+  <!-- Toast -->
   <div id="toast" class="toast"></div>
 
   <script src="app.js"></script>

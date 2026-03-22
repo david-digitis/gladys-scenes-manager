@@ -1,7 +1,7 @@
 {
   "name": "scenes-manager",
-  "version": "1.0.0",
-  "description": "Smart ambiance manager for Gladys Assistant — captures light presets with adaptive weather/daylight variants",
+  "version": "2.0.0",
+  "description": "Smart ambiance manager for Gladys Assistant — 3 modes: night, day-clear, day-cloudy",
   "private": true,
   "main": "index.js",
   "scripts": {

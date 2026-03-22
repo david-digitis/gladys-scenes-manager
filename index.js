@@ -1,12 +1,9 @@
 /**
- * Scenes Manager — Smart Ambiance Manager for Gladys Assistant v1.0
+ * Scenes Manager v2.0 — Smart Ambiance Manager for Gladys Assistant
  *
- * Captures light states from Gladys, stores presets with adaptive variants
- * (day/night, weather), and applies the right variant automatically.
- *
- * Gladys decides WHEN (triggers/scenes). Scenes Manager decides HOW (which variant).
- *
- * HTTP API on port 8890, MQTT switches for Gladys integration.
+ * 3 modes: night, day-clear, day-cloudy
+ * If only 1 mode captured → implicit default (always applied)
+ * Gladys decides WHEN. Scenes Manager decides HOW.
  */
 
 const http = require('http');
@@ -29,9 +26,17 @@ const DEFAULT_CONFIG = {
   latitude: 50.5903,
   longitude: 5.6069,
   openWeatherMapApiKey: '',
-  weatherCacheDuration: 600000, // 10 min
-  cloudyThreshold: 40, // % clouds above this = "cloudy"
+  weatherCacheDuration: 600000,
+  cloudyThreshold: 40,
 };
+
+const MODE_LABELS = {
+  night: 'Nuit',
+  'day-clear': 'Jour beau temps',
+  'day-cloudy': 'Jour mauvais temps',
+};
+
+const ALL_MODES = ['night', 'day-clear', 'day-cloudy'];
 
 // --- Data store ---
 
@@ -45,11 +50,64 @@ function loadData() {
       config: { ...DEFAULT_CONFIG, ...parsed.config },
       scenes: parsed.scenes || {},
     };
+    // Migrate v1 scenes to v2
+    let migrated = false;
+    for (const [key, scene] of Object.entries(data.scenes)) {
+      if (!scene.modes && (scene.variants || scene.default)) {
+        data.scenes[key] = migrateSceneV1toV2(scene);
+        migrated = true;
+      }
+      // Ensure modes object exists
+      if (!data.scenes[key].modes) {
+        data.scenes[key].modes = {};
+      }
+    }
+    if (migrated) {
+      saveData();
+      console.log('[DATA] Migration v1 → v2 effectuee');
+    }
   } catch (e) {
     data = { config: { ...DEFAULT_CONFIG }, scenes: {} };
   }
   const count = Object.keys(data.scenes).length;
   console.log(`[DATA] ${count} scene(s) chargee(s)`);
+}
+
+function migrateSceneV1toV2(scene) {
+  const modes = {};
+
+  if (scene.variants && Array.isArray(scene.variants)) {
+    for (const v of scene.variants) {
+      if (!v.when) continue;
+      const entry = { features: v.features, capturedAt: v.capturedAt };
+
+      if (v.when.daylight === 'night') {
+        // Night variant — prefer the one without weather (most generic)
+        if (!modes.night || !v.when.weather) {
+          modes.night = entry;
+        }
+      } else if (v.when.daylight === 'day' || !v.when.daylight) {
+        // Day variant, or weather-only (no daylight = day implied)
+        if (v.when.weather === 'clear' && !modes['day-clear']) {
+          modes['day-clear'] = entry;
+        } else if (v.when.weather === 'cloudy' && !modes['day-cloudy']) {
+          modes['day-cloudy'] = entry;
+        }
+      }
+    }
+  }
+
+  // Use default as night fallback if no night mode found
+  if (scene.default && scene.default.features && !modes.night) {
+    modes.night = { features: scene.default.features, capturedAt: scene.default.capturedAt };
+  }
+
+  return {
+    name: scene.name,
+    room: scene.room,
+    modes,
+    createdAt: scene.createdAt,
+  };
 }
 
 function saveData() {
@@ -69,7 +127,6 @@ function fetchWeather() {
       return;
     }
 
-    // Return cache if fresh
     if (weatherCache.data && Date.now() - weatherCache.fetchedAt < weatherCacheDuration) {
       resolve(weatherCache.data);
       return;
@@ -85,7 +142,7 @@ function fetchWeather() {
           const w = JSON.parse(body);
           if (res.statusCode === 200) {
             weatherCache = { data: w, fetchedAt: Date.now() };
-            console.log(`[WEATHER] ${w.weather[0].description}, nuages ${w.clouds.all}%, ${w.main.temp}°C`);
+            console.log(`[WEATHER] ${w.weather[0].description}, nuages ${w.clouds.all}%, ${w.main.temp}C`);
             resolve(w);
           } else {
             console.error(`[WEATHER ERR] Status ${res.statusCode}:`, body);
@@ -108,7 +165,6 @@ function getCurrentConditions() {
   const { latitude, longitude } = data.config;
   const now = new Date();
   const sunTimes = SunCalc.getTimes(now, latitude, longitude);
-
   const isDaylight = now >= sunTimes.sunrise && now <= sunTimes.sunset;
 
   return {
@@ -133,36 +189,47 @@ async function getFullConditions() {
   return conditions;
 }
 
-function selectVariant(scene, conditions) {
-  if (!scene.variants || scene.variants.length === 0) {
-    return scene.default || null;
+// --- Mode selection (v2) ---
+
+function resolveTargetMode(conditions) {
+  if (conditions.daylight === 'night') return 'night';
+  if (conditions.weather === 'cloudy') return 'day-cloudy';
+  return 'day-clear';
+}
+
+const MODE_FALLBACKS = {
+  night: ['day-cloudy', 'day-clear'],
+  'day-clear': ['day-cloudy', 'night'],
+  'day-cloudy': ['day-clear', 'night'],
+};
+
+function selectMode(scene, conditions) {
+  const modes = scene.modes || {};
+  const modeKeys = Object.keys(modes);
+
+  if (modeKeys.length === 0) return null;
+
+  // Single mode = implicit default
+  if (modeKeys.length === 1) {
+    return { ...modes[modeKeys[0]], mode: modeKeys[0], fallback: modeKeys[0] !== resolveTargetMode(conditions) };
   }
 
-  const active = scene.adaptiveConditions || [];
-  if (active.length === 0) {
-    return scene.default || scene.variants[0] || null;
+  const target = resolveTargetMode(conditions);
+
+  // Exact match
+  if (modes[target]) {
+    return { ...modes[target], mode: target, fallback: false };
   }
 
-  // Try exact match
-  const exactMatch = scene.variants.find((v) => {
-    if (!v.when) return false;
-    return active.every((cond) => {
-      if (!v.when[cond]) return true; // condition not specified in variant = wildcard
-      return v.when[cond] === conditions[cond];
-    });
-  });
-  if (exactMatch) return exactMatch;
-
-  // Try partial match (daylight has priority over weather)
-  const priorityOrder = ['daylight', 'weather'];
-  for (const cond of priorityOrder) {
-    if (!active.includes(cond)) continue;
-    const partial = scene.variants.find((v) => v.when && v.when[cond] === conditions[cond]);
-    if (partial) return partial;
+  // Fallback
+  for (const fb of (MODE_FALLBACKS[target] || [])) {
+    if (modes[fb]) {
+      return { ...modes[fb], mode: fb, fallback: true };
+    }
   }
 
-  // Fallback to default
-  return scene.default || scene.variants[0] || null;
+  // Last resort
+  return { ...modes[modeKeys[0]], mode: modeKeys[0], fallback: true };
 }
 
 // --- Gladys API client ---
@@ -200,7 +267,6 @@ function gladysRequest(method, apiPath, body) {
 }
 
 async function getGladysDevices(room) {
-  // Get light devices
   const lightRes = await gladysRequest('GET', '/api/v1/device?device_feature_category=light');
   if (lightRes.status !== 200) {
     throw new Error(`Gladys API error: ${lightRes.status}`);
@@ -211,7 +277,6 @@ async function getGladysDevices(room) {
   // Also get dimmer devices (Z-Wave)
   const switchRes = await gladysRequest('GET', '/api/v1/device?device_feature_category=switch&device_feature_type=dimmer');
   if (switchRes.status === 200 && Array.isArray(switchRes.data)) {
-    // Add Z-Wave dimmers that aren't already in the list
     const existingIds = new Set(devices.map((d) => d.id));
     switchRes.data.forEach((d) => {
       if (!existingIds.has(d.id)) devices.push(d);
@@ -221,12 +286,11 @@ async function getGladysDevices(room) {
   // Filter out Matter duplicates
   devices = devices.filter((d) => !d.external_id || !d.external_id.startsWith('matter:'));
 
-  // Filter by room if specified
+  // Filter by room
   if (room) {
     devices = devices.filter((d) => d.room && d.room.name === room);
   }
 
-  // Transform to a cleaner format
   return devices.map((d) => ({
     name: d.name,
     selector: d.selector,
@@ -250,54 +314,35 @@ async function applyFeatures(features) {
   const entries = Object.entries(features);
   if (entries.length === 0) return { applied: 0, errors: 0 };
 
-  // Separate power-on commands from the rest
   const powerOns = entries.filter(([sel]) => sel.endsWith('-binary') || sel.endsWith('-power'));
   const others = entries.filter(([sel]) => !sel.endsWith('-binary') && !sel.endsWith('-power'));
 
   let applied = 0;
   let errors = 0;
 
-  // First: power on devices (in parallel)
   if (powerOns.length > 0) {
-    const results = await Promise.all(
+    await Promise.all(
       powerOns.map(([selector, value]) =>
         gladysRequest('POST', `/api/v1/device_feature/${selector}/value`, { value })
           .then((r) => {
             if (r.status === 200) applied++;
-            else {
-              console.error(`[APPLY ERR] ${selector}: status ${r.status}`);
-              errors++;
-            }
+            else { console.error(`[APPLY ERR] ${selector}: status ${r.status}`); errors++; }
           })
-          .catch((e) => {
-            console.error(`[APPLY ERR] ${selector}:`, e.message);
-            errors++;
-          })
+          .catch((e) => { console.error(`[APPLY ERR] ${selector}:`, e.message); errors++; })
       )
     );
-
-    // Small delay to let devices power on before setting color/brightness
-    if (powerOns.some(([, v]) => v === 1)) {
-      await sleep(150);
-    }
+    if (powerOns.some(([, v]) => v === 1)) await sleep(150);
   }
 
-  // Then: apply colors, brightness, temperature, dimmers (in parallel)
   if (others.length > 0) {
     await Promise.all(
       others.map(([selector, value]) =>
         gladysRequest('POST', `/api/v1/device_feature/${selector}/value`, { value })
           .then((r) => {
             if (r.status === 200) applied++;
-            else {
-              console.error(`[APPLY ERR] ${selector}: status ${r.status}`);
-              errors++;
-            }
+            else { console.error(`[APPLY ERR] ${selector}: status ${r.status}`); errors++; }
           })
-          .catch((e) => {
-            console.error(`[APPLY ERR] ${selector}:`, e.message);
-            errors++;
-          })
+          .catch((e) => { console.error(`[APPLY ERR] ${selector}:`, e.message); errors++; })
       )
     );
   }
@@ -307,7 +352,7 @@ async function applyFeatures(features) {
 
 // --- Scene application ---
 
-async function applyScene(key, forceVariant) {
+async function applyScene(key, forceMode) {
   const scene = data.scenes[key];
   if (!scene) {
     console.log(`[SCENE] "${key}" introuvable`);
@@ -315,33 +360,32 @@ async function applyScene(key, forceVariant) {
   }
 
   const start = Date.now();
-  let variant;
+  let selected;
   let conditions;
 
-  if (forceVariant) {
-    // Force a specific variant by label or index
-    variant = scene.variants.find((v) => v.label === forceVariant);
-    if (!variant && forceVariant === 'default') variant = scene.default;
-    if (!variant) {
-      return { ok: false, error: `Variante "${forceVariant}" introuvable` };
+  if (forceMode) {
+    const modeData = scene.modes[forceMode];
+    if (!modeData) {
+      return { ok: false, error: `Mode "${forceMode}" introuvable` };
     }
-    conditions = { forced: true };
+    selected = { ...modeData, mode: forceMode, fallback: false };
+    conditions = { forced: true, mode: forceMode };
   } else {
-    // Smart selection
     conditions = await getFullConditions();
-    variant = selectVariant(scene, conditions);
+    selected = selectMode(scene, conditions);
   }
 
-  if (!variant || !variant.features) {
-    return { ok: false, error: 'Aucune variante applicable' };
+  if (!selected || !selected.features) {
+    return { ok: false, error: 'Aucun mode applicable' };
   }
 
-  console.log(`[SCENE] Application "${scene.name}" → ${variant.label || 'default'} (${Object.keys(variant.features).length} features)`);
+  const modeLabel = MODE_LABELS[selected.mode] || selected.mode;
+  const fbTag = selected.fallback ? ' (fallback)' : '';
+  console.log(`[SCENE] "${scene.name}" → ${modeLabel}${fbTag} (${Object.keys(selected.features).length} features)`);
 
-  const result = await applyFeatures(variant.features);
+  const result = await applyFeatures(selected.features);
   const elapsed = Date.now() - start;
 
-  // Update MQTT switch state (radio buttons per room)
   updateSceneSwitches(key);
 
   console.log(`[SCENE] "${scene.name}" appliquee en ${elapsed}ms (${result.applied} OK, ${result.errors} erreurs)`);
@@ -349,7 +393,9 @@ async function applyScene(key, forceVariant) {
   return {
     ok: true,
     scene: scene.name,
-    variant: variant.label || 'default',
+    mode: selected.mode,
+    modeLabel,
+    fallback: selected.fallback || false,
     conditions,
     applied: result.applied,
     errors: result.errors,
@@ -367,7 +413,6 @@ function ambianceExtId(key) {
 
 function updateSceneSwitches(activeKey) {
   if (!mqttClient || !mqttClient.connected) return;
-
   const activeScene = data.scenes[activeKey];
   if (!activeScene) return;
 
@@ -408,7 +453,6 @@ function serveStatic(req, res) {
   let filePath = req.url === '/' ? '/index.html' : req.url.split('?')[0];
   const fullPath = path.join(PUBLIC_DIR, filePath);
 
-  // Security: prevent path traversal
   if (!fullPath.startsWith(PUBLIC_DIR)) {
     res.writeHead(403);
     res.end();
@@ -443,7 +487,6 @@ function startHttpServer() {
     const url = new URL(req.url, `http://localhost:${PORT}`);
     const apiPath = url.pathname;
 
-    // Serve static files first (only for non-API routes)
     if (!apiPath.startsWith('/scenes') && !apiPath.startsWith('/capture') && !apiPath.startsWith('/weather') && !apiPath.startsWith('/status') && !apiPath.startsWith('/config') && !apiPath.startsWith('/rooms')) {
       if (serveStatic(req, res)) return;
     }
@@ -457,9 +500,8 @@ function startHttpServer() {
           key,
           name: s.name,
           room: s.room,
-          adaptiveConditions: s.adaptiveConditions || [],
-          variantCount: (s.variants || []).length,
-          hasDefault: !!s.default,
+          modes: Object.keys(s.modes || {}),
+          modeCount: Object.keys(s.modes || {}).length,
           switchExtId: ambianceExtId(key),
         }));
         jsonResponse(res, 200, { scenes });
@@ -497,9 +539,7 @@ function startHttpServer() {
         data.scenes[key] = {
           name,
           room,
-          adaptiveConditions: body.adaptiveConditions || [],
-          variants: [],
-          default: null,
+          modes: {},
           createdAt: new Date().toISOString(),
         };
         saveData();
@@ -519,7 +559,6 @@ function startHttpServer() {
         const body = JSON.parse(await readBody(req));
         if (body.name) data.scenes[key].name = body.name;
         if (body.room) data.scenes[key].room = body.room;
-        if (body.adaptiveConditions) data.scenes[key].adaptiveConditions = body.adaptiveConditions;
         saveData();
         jsonResponse(res, 200, { ok: true, key });
         return;
@@ -544,6 +583,26 @@ function startHttpServer() {
         return;
       }
 
+      // DELETE /scenes/:key/mode/:mode
+      if (req.method === 'DELETE' && apiPath.match(/^\/scenes\/[^/]+\/mode\/[^/]+$/)) {
+        const parts = apiPath.split('/');
+        const key = parts[2];
+        const mode = parts[4];
+        if (!data.scenes[key]) {
+          jsonResponse(res, 404, { error: `Scene "${key}" introuvable` });
+          return;
+        }
+        if (!data.scenes[key].modes[mode]) {
+          jsonResponse(res, 404, { error: `Mode "${mode}" introuvable` });
+          return;
+        }
+        delete data.scenes[key].modes[mode];
+        saveData();
+        console.log(`[SCENE] Mode "${MODE_LABELS[mode]}" supprime de "${data.scenes[key].name}"`);
+        jsonResponse(res, 200, { ok: true, key, deletedMode: mode });
+        return;
+      }
+
       // POST /scenes/:key/apply
       if (req.method === 'POST' && apiPath.match(/^\/scenes\/[^/]+\/apply$/)) {
         const key = apiPath.split('/')[2];
@@ -556,7 +615,7 @@ function startHttpServer() {
       if (req.method === 'POST' && apiPath.match(/^\/scenes\/[^/]+\/apply-force$/)) {
         const key = apiPath.split('/')[2];
         const body = JSON.parse(await readBody(req));
-        const result = await applyScene(key, body.variant);
+        const result = await applyScene(key, body.mode);
         jsonResponse(res, result.ok ? 200 : 404, result);
         return;
       }
@@ -574,7 +633,7 @@ function startHttpServer() {
       // POST /capture
       if (req.method === 'POST' && apiPath === '/capture') {
         const body = JSON.parse(await readBody(req));
-        const { sceneKey, sceneName, room, features, isDefault, conditions, label } = body;
+        const { sceneKey, sceneName, room, features, mode } = body;
 
         if (!sceneKey || !room || !features || Object.keys(features).length === 0) {
           jsonResponse(res, 400, { error: 'sceneKey, room et features requis' });
@@ -584,65 +643,41 @@ function startHttpServer() {
           jsonResponse(res, 400, { error: 'sceneKey: minuscules, chiffres et tirets uniquement' });
           return;
         }
+        if (!mode || !ALL_MODES.includes(mode)) {
+          jsonResponse(res, 400, { error: `mode requis: ${ALL_MODES.join(', ')}` });
+          return;
+        }
 
         // Create scene if it doesn't exist
         if (!data.scenes[sceneKey]) {
           data.scenes[sceneKey] = {
             name: sceneName || sceneKey,
             room,
-            adaptiveConditions: [],
-            variants: [],
-            default: null,
+            modes: {},
             createdAt: new Date().toISOString(),
           };
           subscribeSceneSwitch(sceneKey);
         }
 
         const scene = data.scenes[sceneKey];
-        const variantData = {
+        const isUpdate = !!scene.modes[mode];
+
+        scene.modes[mode] = {
           features,
           capturedAt: new Date().toISOString(),
         };
 
-        if (isDefault) {
-          // Save as default
-          scene.default = { ...variantData, label: 'default' };
-          console.log(`[CAPTURE] Default de "${scene.name}" enregistre (${Object.keys(features).length} features)`);
-        } else {
-          // Save as variant
-          const when = conditions || {};
-          const variantLabel = label || buildLabel(when);
-          variantData.when = when;
-          variantData.label = variantLabel;
-
-          // Update adaptiveConditions
-          Object.keys(when).forEach((cond) => {
-            if (!scene.adaptiveConditions.includes(cond)) {
-              scene.adaptiveConditions.push(cond);
-            }
-          });
-
-          // Replace existing variant with same conditions or add new
-          const existingIdx = scene.variants.findIndex(
-            (v) => v.when && JSON.stringify(v.when) === JSON.stringify(when)
-          );
-          if (existingIdx >= 0) {
-            scene.variants[existingIdx] = variantData;
-            console.log(`[CAPTURE] Variante "${variantLabel}" de "${scene.name}" mise a jour`);
-          } else {
-            scene.variants.push(variantData);
-            console.log(`[CAPTURE] Variante "${variantLabel}" ajoutee a "${scene.name}"`);
-          }
-        }
-
         saveData();
-        jsonResponse(res, 200, { ok: true, sceneKey, variant: variantData.label || 'default' });
+
+        const modeLabel = MODE_LABELS[mode];
+        const action = isUpdate ? 'mis a jour' : 'enregistre';
+        console.log(`[CAPTURE] "${scene.name}" mode "${modeLabel}" ${action} (${Object.keys(features).length} features)`);
+        jsonResponse(res, 200, { ok: true, sceneKey, mode, modeLabel, updated: isUpdate });
         return;
       }
 
       // ===== ROOMS =====
 
-      // GET /rooms
       if (req.method === 'GET' && apiPath === '/rooms') {
         const devices = await getGladysDevices();
         const rooms = [...new Set(devices.map((d) => d.room).filter(Boolean))].sort();
@@ -652,16 +687,17 @@ function startHttpServer() {
 
       // ===== WEATHER =====
 
-      // GET /weather
       if (req.method === 'GET' && apiPath === '/weather') {
         const conditions = await getFullConditions();
+        const targetMode = resolveTargetMode(conditions);
+        conditions.targetMode = targetMode;
+        conditions.targetModeLabel = MODE_LABELS[targetMode];
         jsonResponse(res, 200, conditions);
         return;
       }
 
       // ===== STATUS =====
 
-      // GET /status
       if (req.method === 'GET' && apiPath === '/status') {
         let gladysOk = false;
         try {
@@ -681,9 +717,7 @@ function startHttpServer() {
 
       // ===== CONFIG =====
 
-      // GET /config
       if (req.method === 'GET' && apiPath === '/config') {
-        // Don't expose full API keys
         const safe = { ...data.config };
         if (safe.gladysApiKey) safe.gladysApiKey = safe.gladysApiKey.substring(0, 8) + '...';
         if (safe.openWeatherMapApiKey) safe.openWeatherMapApiKey = safe.openWeatherMapApiKey.substring(0, 8) + '...';
@@ -691,7 +725,6 @@ function startHttpServer() {
         return;
       }
 
-      // PUT /config
       if (req.method === 'PUT' && apiPath === '/config') {
         const body = JSON.parse(await readBody(req));
         const allowed = ['gladysUrl', 'gladysApiKey', 'latitude', 'longitude', 'openWeatherMapApiKey', 'weatherCacheDuration', 'cloudyThreshold'];
@@ -699,7 +732,6 @@ function startHttpServer() {
           if (body[k] !== undefined) data.config[k] = body[k];
         });
         saveData();
-        // Invalidate weather cache on config change
         weatherCache = { data: null, fetchedAt: 0 };
         console.log('[CONFIG] Configuration mise a jour');
         jsonResponse(res, 200, { ok: true });
@@ -717,7 +749,7 @@ function startHttpServer() {
   });
 
   server.listen(PORT, () => {
-    console.log(`[HTTP] Scenes Manager disponible sur port ${PORT}`);
+    console.log(`[HTTP] Scenes Manager v2.0 sur port ${PORT}`);
   });
 }
 
@@ -739,13 +771,6 @@ function readBody(req) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function buildLabel(when) {
-  const parts = [];
-  if (when.daylight) parts.push(when.daylight === 'day' ? 'Jour' : 'Nuit');
-  if (when.weather) parts.push(when.weather === 'clear' ? 'Clair' : 'Couvert');
-  return parts.join(' + ') || 'default';
 }
 
 // --- MQTT ---
@@ -806,7 +831,7 @@ process.on('SIGINT', () => {
 
 // --- Startup ---
 
-console.log('[SM] Scenes Manager v1.0');
+console.log('[SM] Scenes Manager v2.0');
 loadData();
 startMqtt();
 startHttpServer();
